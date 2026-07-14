@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import './App.css'
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 function App() {
   const [prompt, setPrompt] = useState('')
   const [tableName, setTableName] = useState('heart')
@@ -31,7 +33,7 @@ function App() {
     formData.append('file', uploadFile)
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/upload', {
+      const response = await fetch(`${API_BASE_URL}/upload`, {
         method: 'POST',
         body: formData,
       })
@@ -63,7 +65,7 @@ function App() {
 
     try {
       const query = new URLSearchParams({ prompt, table_name: tableName })
-      const response = await fetch(`http://127.0.0.1:8000/ask?${query.toString()}`, {
+      const response = await fetch(`${API_BASE_URL}/ask?${query.toString()}`, {
         method: 'POST',
         headers: { Accept: 'application/json' },
       })

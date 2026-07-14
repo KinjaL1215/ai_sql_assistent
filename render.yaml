@@ -1,0 +1,22 @@
+databases:
+  - name: ai-sql-db
+    plan: free
+    databaseName: ai_sql_db
+
+services:
+  - type: web
+    name: ai-sql-assistant-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    rootDir: backend
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-sql-db
+          property: connectionString
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
