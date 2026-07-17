@@ -428,7 +428,7 @@ def build_starts_with_query(table_name: str, columns: list[str], user_prompt: st
     prefix = prefix_match.group(1).replace("'", "''")
     return (
         f"SELECT * FROM {quote_identifier(table_name)} "
-        f"WHERE {quote_identifier(column)}::text ILIKE '{prefix}%';"
+        f"WHERE {quote_identifier(column)} ILIKE '{prefix}%';"
     )
 
 
@@ -450,7 +450,7 @@ def build_text_match_query(table_name: str, columns: list[str], user_prompt: str
             value = clean_prompt_value(contains_match.group(1))
             return (
                 f"SELECT * FROM {quote_identifier(table_name)} "
-                f"WHERE {quote_identifier(column)}::text ILIKE '%{value}%';"
+                f"WHERE {quote_identifier(column)} ILIKE '%{value}%';"
             )
 
         ends_match = re.search(
@@ -462,7 +462,7 @@ def build_text_match_query(table_name: str, columns: list[str], user_prompt: str
             value = clean_prompt_value(ends_match.group(1))
             return (
                 f"SELECT * FROM {quote_identifier(table_name)} "
-                f"WHERE {quote_identifier(column)}::text ILIKE '%{value}';"
+                f"WHERE {quote_identifier(column)} ILIKE '%{value}';"
             )
 
         equals_match = re.search(
@@ -482,7 +482,7 @@ def build_text_match_query(table_name: str, columns: list[str], user_prompt: str
                 )
             return (
                 f"SELECT * FROM {quote_identifier(table_name)} "
-                f"WHERE TRIM({quote_identifier(column)}::text) ILIKE '{value}';"
+                f"WHERE TRIM({quote_identifier(column)}) ILIKE '{value}';"
             )
 
     return None
@@ -584,7 +584,7 @@ def build_direct_query(table_name: str, columns: list[str], user_prompt: str) ->
             return query
 
     if re.search(r"\b(?:show|display|get|list)\b.*\b(?:all|data|rows|records)\b", user_prompt, re.I):
-        return f"SELECT * FROM {quote_identifier(table_name)} LIMIT 500;"
+        return f"SELECT * FROM {quote_identifier(table_name)};"
 
     return None
 
