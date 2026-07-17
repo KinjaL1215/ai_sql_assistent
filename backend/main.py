@@ -472,9 +472,17 @@ def build_text_match_query(table_name: str, columns: list[str], user_prompt: str
         )
         if equals_match:
             value = clean_prompt_value(equals_match.group(1))
+            if re.fullmatch(r"-?\d+(?:\.\d+)?", value):
+                normalized_value = value.lstrip("+")
+                normalized_column = f"NULLIF(TRIM({quote_identifier(column)}::text), '')"
+                return (
+                    f"SELECT * FROM {quote_identifier(table_name)} "
+                    f"WHERE {normalized_column} ~ '^-?\\d+(?:\\.\\d+)?$' "
+                    f"AND {normalized_column}::numeric = {normalized_value};"
+                )
             return (
                 f"SELECT * FROM {quote_identifier(table_name)} "
-                f"WHERE {quote_identifier(column)}::text ILIKE '{value}';"
+                f"WHERE TRIM({quote_identifier(column)}::text) ILIKE '{value}';"
             )
 
     return None
