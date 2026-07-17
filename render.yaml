@@ -16,7 +16,9 @@ services:
         fromDatabase:
           name: ai-sql-db
           property: connectionString
-      - key: GEMINI_API_KEY
+      - key: GROQ_API_KEY
         sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
       - key: ALLOWED_ORIGINS
         sync: false

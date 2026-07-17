@@ -6,7 +6,6 @@ colorama==0.4.6
 et_xmlfile==2.0.0
 fastapi==0.138.0
 greenlet==3.5.2
-google-generativeai
 h11==0.16.0
 idna==3.18
 numpy==2.5.0

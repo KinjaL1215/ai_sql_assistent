@@ -1,7 +1,10 @@
 from pathlib import Path
+import json
 import os
 import re
 import subprocess
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -17,16 +20,7 @@ try:
 except ImportError:  # pragma: no cover - handled at runtime
     ollama = None
 
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-
-# Configure Gemini if API key is available
-if GEMINI_API_KEY and genai:
-    genai.configure(api_key=GEMINI_API_KEY)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 app = FastAPI()
 
@@ -106,17 +100,85 @@ def has_data_like_headers(columns: list[object]) -> bool:
     return suspicious_count >= max(1, len(columns) // 2)
 
 
+def make_unique_column_names(columns: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    unique_columns = []
+    for column in columns:
+        base_name = column.strip() or "column"
+        count = seen.get(base_name, 0) + 1
+        seen[base_name] = count
+        unique_columns.append(base_name if count == 1 else f"{base_name}_{count}")
+    return unique_columns
+
+
+def infer_column_name_from_values(values: pd.Series, index: int) -> str:
+    sample = values.dropna().astype(str).str.strip()
+    sample = sample[sample != ""].head(25)
+    if sample.empty:
+        return f"column_{index}"
+
+    numeric_values = pd.to_numeric(sample, errors="coerce")
+    numeric_ratio = numeric_values.notna().mean()
+
+    if numeric_ratio >= 0.9:
+        numeric_sample = numeric_values.dropna()
+        string_sample = sample[numeric_values.notna()]
+        long_integer_ratio = string_sample.str.fullmatch(r"\d{8,}").fillna(False).mean()
+        if long_integer_ratio >= 0.8:
+            return "student_id"
+
+        if (
+            not numeric_sample.empty
+            and numeric_sample.between(0, 1).mean() >= 0.8
+        ):
+            return "attendance"
+
+        return f"number_{index}"
+
+    alphabetic_ratio = sample.str.contains(r"[A-Za-z]", regex=True).mean()
+    mostly_names = sample.str.fullmatch(r"[A-Za-z .'-]+").fillna(False).mean()
+    if alphabetic_ratio >= 0.8 and mostly_names >= 0.7:
+        return "student_name"
+
+    return f"column_{index}"
+
+
+def infer_column_names_from_data(df: pd.DataFrame) -> list[str]:
+    inferred_columns = [
+        infer_column_name_from_values(df.iloc[:, index - 1], index)
+        for index in range(1, len(df.columns) + 1)
+    ]
+    return make_unique_column_names(inferred_columns)
+
+
+def drop_empty_placeholder_columns(df: pd.DataFrame) -> pd.DataFrame:
+    columns_to_keep = []
+    for column in df.columns:
+        values = df[column].dropna().astype(str).str.strip()
+        meaningful_values = values[
+            (values != "")
+            & (values.str.lower() != "nan")
+            & (~values.str.lower().str.startswith("unnamed"))
+        ]
+        if not meaningful_values.empty:
+            columns_to_keep.append(column)
+
+    return df.loc[:, columns_to_keep] if columns_to_keep else df
+
+
 def normalize_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
     if has_data_like_headers(list(df.columns)):
         first_row = pd.DataFrame([list(df.columns)], columns=df.columns)
         df = pd.concat([first_row, df], ignore_index=True)
-        df.columns = [f"column_{index}" for index in range(1, len(df.columns) + 1)]
+        df = drop_empty_placeholder_columns(df)
+        df.columns = infer_column_names_from_data(df)
         return df
 
-    df.columns = [
+    df = drop_empty_placeholder_columns(df)
+    df.columns = make_unique_column_names([
         str(column).strip() or f"column_{index}"
         for index, column in enumerate(df.columns, start=1)
-    ]
+    ])
     return df
 
 @app.get("/")
@@ -295,6 +357,39 @@ def find_columns_in_prompt(columns: list[str], user_prompt: str) -> list[str]:
     return sorted(matching_columns, key=lambda value: len(normalize_column_name(value)), reverse=True)
 
 
+def infer_text_column(columns: list[str], user_prompt: str) -> str | None:
+    normalized_prompt = normalize_column_name(user_prompt)
+
+    if "name" in normalized_prompt:
+        preferred_patterns = ["fullname", "studentname", "name"]
+        scored_columns: list[tuple[int, str]] = []
+        for column in columns:
+            normalized_column = normalize_column_name(column)
+            score = 0
+            if "fullname" in normalized_column:
+                score += 30
+            if "studentname" in normalized_column:
+                score += 20
+            if normalized_column.endswith("name"):
+                score += 15
+            if "name" in normalized_column:
+                score += 10
+            if score:
+                scored_columns.append((score, column))
+
+        if scored_columns:
+            scored_columns.sort(key=lambda item: (item[0], len(normalize_column_name(item[1]))), reverse=True)
+            return scored_columns[0][1]
+
+    for token in ("branch", "department", "course", "city", "state"):
+        if token in normalized_prompt:
+            for column in columns:
+                if token in normalize_column_name(column):
+                    return column
+
+    return None
+
+
 def clean_prompt_value(value: str) -> str:
     value = re.split(
         r"\b(?:and|or|order by|sort by|group by|limit|show|display|return)\b",
@@ -321,6 +416,11 @@ def build_starts_with_query(table_name: str, columns: list[str], user_prompt: st
         for column in columns
         if normalize_column_name(column) in normalized_prompt
     ]
+    if not matching_columns:
+        inferred_column = infer_text_column(columns, prompt)
+        if inferred_column:
+            matching_columns = [inferred_column]
+
     if not matching_columns:
         return None
 
@@ -506,23 +606,61 @@ def get_available_model() -> str | None:
         return preferred
 
 
-def generate_sql_with_gemini(sql_prompt: str) -> str:
-    """Generate SQL using Google Gemini API (for deployment)."""
-    if genai is None:
-        raise HTTPException(status_code=500, detail="google-generativeai package is not installed.")
+def generate_sql_with_groq(sql_prompt: str) -> str:
+    """Generate SQL using Groq's OpenAI-compatible chat completions API."""
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY environment variable is not configured.")
+
+    model_name = os.getenv("GROQ_MODEL") or "llama-3.1-8b-instant"
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": sql_prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": 512,
+    }
+    request = Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "ai-sql-assistant/1.0",
+        },
+        method="POST",
+    )
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(
-            f"{SYSTEM_PROMPT}\n\n{sql_prompt}",
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.0,
-                max_output_tokens=512,
-            ),
-        )
-        return response.text or ""
+        with urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        if "error code: 1010" in error_body.lower() or "access denied" in error_body.lower():
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Groq API access was blocked by Groq/Cloudflare with error 1010. "
+                    "Check that the API key is valid, try a different network/VPN off, "
+                    "and make sure the request is going to https://api.groq.com/openai/v1/chat/completions."
+                ),
+            ) from exc
+        raise HTTPException(status_code=502, detail=f"Groq API request failed: {error_body[:300]}") from exc
+    except URLError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not connect to Groq API: {exc.reason}") from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Gemini API request failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Groq API request failed: {exc}") from exc
+
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail=f"Groq returned an unexpected response: {data}") from exc
+
+    if not content:
+        raise HTTPException(status_code=502, detail="Groq returned an empty response.")
+    return content
 
 
 def generate_sql_with_ollama(sql_prompt: str) -> str:
@@ -573,9 +711,9 @@ def ask_ai(prompt: str, table_name: str = "heart"):
     else:
         sql_prompt = build_sql_prompt(table_name, columns, prompt)
 
-        # Use Gemini if API key is configured, otherwise fall back to Ollama
-        if GEMINI_API_KEY and genai:
-            content = generate_sql_with_gemini(sql_prompt)
+        # Use deploy-friendly Groq first, then fall back to local Ollama.
+        if GROQ_API_KEY:
+            content = generate_sql_with_groq(sql_prompt)
         else:
             content = generate_sql_with_ollama(sql_prompt)
 
