@@ -52,6 +52,78 @@ engine = create_engine(DATABASE_URL)
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+import asyncio
+
+CLEANUP_INTERVAL_MINUTES = int(os.getenv("CLEANUP_INTERVAL_MINUTES", "30"))
+
+async def clean_expired_tables():
+    while True:
+        try:
+            # Check every minute
+            await asyncio.sleep(60)
+            
+            with engine.connect() as conn:
+                # Find tables older than CLEANUP_INTERVAL_MINUTES
+                query = text(
+                    "SELECT table_name, file_path FROM uploaded_tables_metadata "
+                    "WHERE created_at < NOW() - CAST(:interval || ' minutes' AS INTERVAL)"
+                )
+                result = conn.execute(query, {"interval": CLEANUP_INTERVAL_MINUTES})
+                expired_tables = result.fetchall()
+            
+            for row in expired_tables:
+                tbl_name, file_path = row[0], row[1]
+                print(f"Cleanup: Found expired table '{tbl_name}' (older than {CLEANUP_INTERVAL_MINUTES} minutes). Deleting...")
+                
+                # We do each table drop and delete in separate transactions so that failures in one do not block others
+                with engine.begin() as conn:
+                    # 1. Drop PostgreSQL table
+                    try:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {quote_identifier(tbl_name)}"))
+                        print(f"Cleanup: Successfully dropped table '{tbl_name}'")
+                    except Exception as drop_err:
+                        print(f"Cleanup Error: Failed to drop table '{tbl_name}': {drop_err}")
+                    
+                    # 2. Delete metadata row
+                    try:
+                        conn.execute(
+                            text("DELETE FROM uploaded_tables_metadata WHERE table_name = :tbl"),
+                            {"tbl": tbl_name}
+                        )
+                        print(f"Cleanup: Deleted metadata row for '{tbl_name}'")
+                    except Exception as del_err:
+                        print(f"Cleanup Error: Failed to delete metadata entry for '{tbl_name}': {del_err}")
+                
+                # 3. Delete local physical file
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                        print(f"Cleanup: Successfully deleted file '{file_path}'")
+                    except Exception as file_err:
+                        print(f"Cleanup Error: Failed to delete file '{file_path}': {file_err}")
+                        
+        except Exception as e:
+            print(f"Cleanup Worker Error: Exception occurred: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    # 1. Create the uploaded_tables_metadata table if it doesn't exist
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS uploaded_tables_metadata (
+                    table_name VARCHAR(255) PRIMARY KEY,
+                    file_path VARCHAR(512),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+        print("Database metadata table initialized successfully.")
+    except Exception as exc:
+        print(f"Error initializing metadata table: {exc}")
+        
+    # 2. Start the cleanup task
+    asyncio.create_task(clean_expired_tables())
+
 SUPPORTED_EXTENSIONS = {".csv", ".xls", ".xlsx"}
 
 
@@ -221,6 +293,22 @@ async def upload_csv(file: UploadFile = File(...)):
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not save data to database: {exc}")
+
+    # Register upload for auto-cleanup after 30 minutes
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO uploaded_tables_metadata (table_name, file_path, created_at) "
+                    "VALUES (:table_name, :file_path, NOW()) "
+                    "ON CONFLICT (table_name) DO UPDATE "
+                    "SET file_path = EXCLUDED.file_path, created_at = NOW()"
+                ),
+                {"table_name": table_name, "file_path": file_path}
+            )
+        print(f"Registered table '{table_name}' with file path '{file_path}' for auto-cleanup.")
+    except Exception as exc:
+        print(f"Warning: Could not register table '{table_name}' metadata for cleanup: {exc}")
 
     return {
         "message": "File uploaded successfully",

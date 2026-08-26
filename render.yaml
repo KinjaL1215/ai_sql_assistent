@@ -22,3 +22,5 @@ services:
         value: llama-3.1-8b-instant
       - key: ALLOWED_ORIGINS
         sync: false
+      - key: CLEANUP_INTERVAL_MINUTES
+        value: "30"
