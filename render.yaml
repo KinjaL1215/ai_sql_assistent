@@ -25,8 +25,9 @@ services:
       - key: CLEANUP_INTERVAL_MINUTES
         value: "30"
 
-  - type: static
+  - type: web
     name: ai-sql-assistant-frontend
+    runtime: static
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     rootDir: frontend
