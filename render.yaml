@@ -33,7 +33,4 @@ services:
     rootDir: frontend
     envVars:
       - key: VITE_API_URL
-        fromService:
-          name: ai-sql-assistant-api
-          type: web
-          property: url
+        sync: false
