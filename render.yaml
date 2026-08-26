@@ -21,6 +21,20 @@ services:
       - key: GROQ_MODEL
         value: llama-3.1-8b-instant
       - key: ALLOWED_ORIGINS
-        sync: false
+        value: "*"
       - key: CLEANUP_INTERVAL_MINUTES
         value: "30"
+
+  - type: web
+    name: ai-sql-assistant-frontend
+    runtime: static
+    plan: free
+    buildCommand: npm install && npm run build
+    publishDir: dist
+    rootDir: frontend
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          name: ai-sql-assistant-api
+          type: web
+          property: url
