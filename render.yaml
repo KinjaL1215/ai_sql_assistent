@@ -25,12 +25,10 @@ services:
       - key: CLEANUP_INTERVAL_MINUTES
         value: "30"
 
-  - type: web
+  - type: static
     name: ai-sql-assistant-frontend
-    runtime: static
-    plan: free
     buildCommand: npm install && npm run build
-    publishDir: dist
+    staticPublishPath: dist
     rootDir: frontend
     envVars:
       - key: VITE_API_URL
