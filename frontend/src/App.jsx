@@ -12,7 +12,7 @@ const EXAMPLE_PROMPTS = [
 
 function App() {
   const [prompt, setPrompt] = useState('')
-  const [tableName, setTableName] = useState('heart')
+  const [tableName, setTableName] = useState('')
   const [uploadFile, setUploadFile] = useState(null)
   const [uploadStatus, setUploadStatus] = useState('')
   const [loading, setLoading] = useState(false)
@@ -34,15 +34,21 @@ function App() {
   }
 
   const fetchSchema = async (table) => {
-    if (!table) return
+    if (!table) {
+      setColumnsList([])
+      return
+    }
     try {
       const response = await fetch(`${API_BASE_URL}/schema/${table}`)
-      if (response.ok) {
-        const data = await response.json()
-        setColumnsList(data.columns || [])
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || `Could not load schema for "${table}".`)
       }
+      setColumnsList(data.columns || [])
     } catch (err) {
       console.error('Failed to fetch schema:', err)
+      setColumnsList([])
+      setError(err.message)
     }
   }
 
@@ -78,7 +84,6 @@ function App() {
       setUploadStatus('Uploaded successfully.')
       setMessage(`Table "${data.table_name}" is ready with ${data.rows} rows.`)
       setTableName(data.table_name)
-      fetchSchema(data.table_name)
     } catch (err) {
       setUploadStatus('Upload failed.')
       setError(err.message)
@@ -89,6 +94,10 @@ function App() {
     if (event) event.preventDefault()
     if (!prompt.trim()) {
       setError('Please enter a business question before running the query.')
+      return
+    }
+    if (!tableName.trim()) {
+      setError('Upload a CSV or Excel file before running a query.')
       return
     }
 
@@ -247,7 +256,7 @@ function App() {
                   className="table-input"
                   value={tableName}
                   onChange={(event) => setTableName(event.target.value)}
-                  placeholder="heart"
+                  placeholder="Upload a file to select a table"
                 />
               </div>
               {columnsList.length > 0 && (
