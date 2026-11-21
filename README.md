@@ -142,7 +142,7 @@ ollama pull llama3.2:1b
 
 ## Deployment
 
-`render.yaml` defines a Render PostgreSQL database and FastAPI web service. Set the required `GROQ_API_KEY` and `ALLOWED_ORIGINS` values in Render's environment settings. Deploy the frontend separately, set `VITE_API_URL` to the backend URL during its build, and include that frontend URL in `ALLOWED_ORIGINS`.
+`render.yaml` defines a Render PostgreSQL database and FastAPI web service. The backend requires SSL automatically when connecting to a Render-hosted PostgreSQL URL. Set the required `GROQ_API_KEY` and `ALLOWED_ORIGINS` values in Render's environment settings. Deploy the frontend separately, set `VITE_API_URL` to the backend URL during its build, and include that frontend URL in `ALLOWED_ORIGINS`.
 
 ## Project structure
 

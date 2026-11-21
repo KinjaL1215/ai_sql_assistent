@@ -13,6 +13,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
 from sql_validator import validate_sql
 
 try:
@@ -47,7 +48,11 @@ if not DATABASE_URL:
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(DATABASE_URL)
+database_url = make_url(DATABASE_URL)
+if database_url.host and database_url.host.endswith(".render.com"):
+    database_url = database_url.update_query_dict({"sslmode": "require"})
+
+engine = create_engine(database_url)
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
